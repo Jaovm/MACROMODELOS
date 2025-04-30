@@ -5,6 +5,7 @@ import yfinance as yf
 import requests
 import datetime
 import os
+import time
 import matplotlib.pyplot as plt
 from sklearn.covariance import LedoitWolf
 from scipy.cluster.hierarchy import linkage, dendrogram
@@ -34,7 +35,7 @@ def obter_preco_petroleo_hist(start, end):
     return pd.Series(dtype=float)
 
 def montar_historico_7anos(tickers, setores_por_ticker, start='2018-01-01'):
-    """Gera histórico dos últimos 7 anos (em memória, sem salvar em CSV)."""
+    """Adiciona delay entre requisições no loop."""
     hoje = datetime.date.today()
     inicio = pd.to_datetime(start)
     final = hoje
@@ -57,10 +58,11 @@ def montar_historico_7anos(tickers, setores_por_ticker, start='2018-01-01'):
     macro_df['ipca'] = ipca_hist.reindex(datas, method='ffill')
     macro_df['dolar'] = dolar_hist.reindex(datas, method='ffill')
     macro_df['petroleo'] = petroleo_hist.reindex(datas, method='ffill')
-    macro_df = macro_df.fillna(method='ffill').fillna(method='bfill')
+    macro_df = macro_df.ffill().bfill()  # Atualização para o pandas moderno
 
     historico = []
     for data in datas:
+        time.sleep(1)  # Adiciona um atraso de 1 segundo entre as iterações do loop
         macro = {
             "ipca": macro_df.loc[data, "ipca"],
             "selic": macro_df.loc[data, "selic"],
@@ -411,7 +413,9 @@ def obter_macro():
 
 @st.cache_data(ttl=86400)
 def obter_preco_yf(ticker, nome="Ativo"):
+    """Adiciona delay para evitar limitação de requisições."""
     try:
+        time.sleep(1)  # Adiciona um atraso de 1 segundo antes da requisição
         dados = yf.Ticker(ticker).history(period="5d")
         if not dados.empty and 'Close' in dados.columns:
             return float(dados['Close'].dropna().iloc[-1])
@@ -499,9 +503,10 @@ def pontuar_pib(pib):
 def calcular_media_movel(ticker, periodo="12mo", intervalo="1mo"):
     """
     Calcula a média móvel do preço de um ativo (ex.: soja, milho, petróleo, minério).
-    Retorna float (valor escalar).
+    Adiciona delay para evitar limitação de requisições.
     """
     try:
+        time.sleep(1)  # Adiciona um atraso de 1 segundo antes da requisição
         dados = yf.download(ticker, period=periodo, interval=intervalo, progress=False)
         if not dados.empty:
             media_movel = float(dados['Close'].mean())
