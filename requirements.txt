@@ -1,0 +1,11 @@
+pandas
+numpy
+matplotlib
+yfinance
+scikit-learn
+streamlit
+PyPortfolioOpt
+pytz
+seaborn
+requests
+statsmodels
