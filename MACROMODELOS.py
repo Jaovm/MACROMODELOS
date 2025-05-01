@@ -62,7 +62,7 @@ def montar_historico_7anos(tickers, setores_por_ticker, start='2018-01-01'):
 
     historico = []
     for data in datas:
-        time.sleep(1)  # Adiciona um atraso de 1 segundo entre as iterações do loop
+        time.sleep(3)  # Adiciona um atraso de 1 segundo entre as iterações do loop
         macro = {
             "ipca": macro_df.loc[data, "ipca"],
             "selic": macro_df.loc[data, "selic"],
@@ -415,7 +415,7 @@ def obter_macro():
 def obter_preco_yf(ticker, nome="Ativo"):
     """Adiciona delay para evitar limitação de requisições."""
     try:
-        time.sleep(1)  # Adiciona um atraso de 1 segundo antes da requisição
+        time.sleep(2)  # Adiciona um atraso de 1 segundo antes da requisição
         dados = yf.Ticker(ticker).history(period="5d")
         if not dados.empty and 'Close' in dados.columns:
             return float(dados['Close'].dropna().iloc[-1])
@@ -506,7 +506,7 @@ def calcular_media_movel(ticker, periodo="12mo", intervalo="1mo"):
     Adiciona delay para evitar limitação de requisições.
     """
     try:
-        time.sleep(1)  # Adiciona um atraso de 1 segundo antes da requisição
+        time.sleep(3)  # Adiciona um atraso de 1 segundo antes da requisição
         dados = yf.download(ticker, period=periodo, interval=intervalo, progress=False)
         if not dados.empty:
             media_movel = float(dados['Close'].mean())
