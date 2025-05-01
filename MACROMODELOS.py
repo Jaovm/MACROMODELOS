@@ -14,6 +14,24 @@ from scipy.optimize import minimize
 
 st.set_page_config(page_title="Sugestão de Carteira", layout="wide")
 
+def robust_yf_download(tickers, start, end=None, interval="1d", max_retries=5):
+    """
+    Faz download de dados do Yahoo Finance com retentativas e backoff exponencial.
+    """
+    for attempt in range(max_retries):
+        try:
+            # Delay inicial para evitar problemas de limite
+            time.sleep(2)
+            return yf.download(tickers, start=start, end=end, interval=interval, auto_adjust=True, progress=False)
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Atraso exponencial
+                print(f"Tentativa {attempt + 1}/{max_retries} falhou. Tentando novamente em {wait_time} segundos...")
+                time.sleep(wait_time)
+            else:
+                print(f"Erro ao baixar dados para {tickers}: {e}")
+                return pd.DataFrame()  # Retorna um DataFrame vazio se todas as tentativas falharem
+
 def get_bcb_hist(code, start, end):
     """Baixa série histórica mensal do BCB para um código SGS."""
     url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{code}/dados?formato=json&dataInicial={start}&dataFinal={end}"
@@ -26,43 +44,52 @@ def get_bcb_hist(code, start, end):
     else:
         return pd.Series(dtype=float)
 
+@st.cache_data(ttl=86400)
 def obter_preco_petroleo_hist(start, end):
-    """Baixa preço histórico mensal do petróleo Brent (BZ=F) do Yahoo Finance."""
-    df = yf.download("BZ=F", start=start, end=end, interval="1mo", progress=False)
+    """
+    Baixa preço histórico mensal do petróleo Brent (BZ=F) com cache e retry.
+    """
+    df = robust_yf_download("BZ=F", start=start, end=end, interval="1mo")
     if not df.empty:
         df.index = pd.to_datetime(df.index)
         return df['Close']
     return pd.Series(dtype=float)
 
+
+@st.cache_data(ttl=86400)
 def montar_historico_7anos(tickers, setores_por_ticker, start='2018-01-01'):
-    """Adiciona delay entre requisições no loop."""
+    """
+    Gera histórico macroeconômico e setorial otimizado para os últimos 7 anos.
+    """
     hoje = datetime.date.today()
     inicio = pd.to_datetime(start)
     final = hoje
-    datas = pd.date_range(inicio, final, freq='M').normalize()
-    
-    # Baixar séries macro históricas do BCB
+    datas = pd.date_range(inicio, final, freq='ME').normalize()
+
+    # Baixar séries macroeconômicas do BCB
     selic_hist = get_bcb_hist(432, inicio.strftime('%d/%m/%Y'), final.strftime('%d/%m/%Y'))
     ipca_hist = get_bcb_hist(433, inicio.strftime('%d/%m/%Y'), final.strftime('%d/%m/%Y'))
     dolar_hist = get_bcb_hist(1, inicio.strftime('%d/%m/%Y'), final.strftime('%d/%m/%Y'))
     petroleo_hist = obter_preco_petroleo_hist(inicio.strftime('%Y-%m-%d'), final.strftime('%Y-%m-%d'))
-    
-    # Normalizar todos os índices para garantir compatibilidade
+
+    # Normalizar índices para garantir compatibilidade
     selic_hist.index = pd.to_datetime(selic_hist.index).normalize()
     ipca_hist.index = pd.to_datetime(ipca_hist.index).normalize()
     dolar_hist.index = pd.to_datetime(dolar_hist.index).normalize()
     petroleo_hist.index = pd.to_datetime(petroleo_hist.index).normalize()
-    
+
+    # Criar DataFrame consolidado
     macro_df = pd.DataFrame(index=datas)
     macro_df['selic'] = selic_hist.reindex(datas, method='ffill')
     macro_df['ipca'] = ipca_hist.reindex(datas, method='ffill')
     macro_df['dolar'] = dolar_hist.reindex(datas, method='ffill')
     macro_df['petroleo'] = petroleo_hist.reindex(datas, method='ffill')
-    macro_df = macro_df.ffill().bfill()  # Atualização para o pandas moderno
+    macro_df = macro_df.ffill().bfill()
 
+    # Histórico consolidado com atraso otimizado
     historico = []
     for data in datas:
-        time.sleep(3)  # Adiciona um atraso de 1 segundo entre as iterações do loop
+        time.sleep(1)  # Adiciona atraso no loop para evitar sobrecarga
         macro = {
             "ipca": macro_df.loc[data, "ipca"],
             "selic": macro_df.loc[data, "selic"],
@@ -94,8 +121,7 @@ def montar_historico_7anos(tickers, setores_por_ticker, start='2018-01-01'):
                 "setor": setor,
                 "favorecido": favorecido
             })
-    df_hist = pd.DataFrame(historico)
-    return df_hist
+    return pd.DataFrame(historico)
 
 # ========= DICIONÁRIOS ==========
 
@@ -502,29 +528,23 @@ def pontuar_pib(pib):
 @st.cache_data(ttl=86400)
 def calcular_media_movel(ticker, periodo="12mo", intervalo="1mo"):
     """
-    Calcula a média móvel do preço de um ativo (ex.: soja, milho, petróleo, minério).
-    Adiciona delay para evitar limitação de requisições.
+    Calcula a média móvel para um ativo.
     """
-    try:
-        time.sleep(3)  # Adiciona um atraso de 1 segundo antes da requisição
-        dados = yf.download(ticker, period=periodo, interval=intervalo, progress=False)
-        if not dados.empty:
-            media_movel = float(dados['Close'].mean())
-            return media_movel
-        else:
-            st.warning(f"Dados históricos indisponíveis para {ticker}.")
-            return None
-    except Exception as e:
-        st.error(f"Erro ao calcular média móvel para {ticker}: {e}")
-        return None
+    dados = robust_yf_download(ticker, start=None, end=None, interval=intervalo)
+    if not dados.empty:
+        return dados["Close"].mean()
+    return None
 
 # --- Função para obter preços ideais dinâmicos usando médias móveis ---
 def obter_precos_ideais():
+    """
+    Retorna preços ideais baseados em médias móveis.
+    """
     return {
-        "soja_ideal": calcular_media_movel("ZS=F", periodo="12mo", intervalo="1mo"),    # Soja
-        "milho_ideal": calcular_media_movel("ZC=F", periodo="12mo", intervalo="1mo"),   # Milho
-        "minerio_ideal": calcular_media_movel("TIO=F", periodo="12mo", intervalo="1mo"), # Minério de ferro (use o ticker correto para o seu caso)
-        "petroleo_ideal": calcular_media_movel("BZ=F", periodo="12mo", intervalo="1mo") # Petróleo Brent
+        "soja_ideal": calcular_media_movel("ZS=F"),
+        "milho_ideal": calcular_media_movel("ZC=F"),
+        "minerio_ideal": calcular_media_movel("TIO=F"),
+        "petroleo_ideal": calcular_media_movel("BZ=F")
     }
 
 # --- Atualize os parâmetros globais de commodities ---
@@ -629,14 +649,16 @@ def obter_preco_alvo(ticker):
         st.warning(f"Erro ao obter preço-alvo de {ticker}: {e}")
         return None
 
+@st.cache_data(ttl=3600)
 def obter_preco_atual(ticker):
-    try:
-        dados = yf.Ticker(ticker).history(period="1d")
-        if not dados.empty:
-            return dados['Close'].iloc[-1]
-    except Exception as e:
-        st.warning(f"Erro ao obter preço atual de {ticker}: {e}")
+    """
+    Retorna o preço de fechamento mais recente de um ativo.
+    """
+    dados = robust_yf_download(ticker, start=None, end=None, interval="1d")
+    if not dados.empty:
+        return dados["Close"].iloc[-1]
     return None
+
 
 def gerar_ranking_acoes(carteira, macro, usar_pesos_macro=True):
     score_macro = pontuar_macro(macro)
@@ -957,28 +979,14 @@ def filtrar_ativos_validos(carteira, setores_por_ticker, setores_por_cenario, ma
 
 
 @st.cache_data(ttl=86400)
-def obter_preco_diario_ajustado(tickers):
-    dados_brutos = yf.download(tickers, period="7y", auto_adjust=False)
-
-    # Forçar tickers a ser lista, mesmo se for string
-    if isinstance(tickers, str):
-        tickers = [tickers]
-
-    if isinstance(dados_brutos.columns, pd.MultiIndex):
-        if 'Adj Close' in dados_brutos.columns.get_level_values(0):
-            return dados_brutos['Adj Close']
-        elif 'Close' in dados_brutos.columns.get_level_values(0):
-            return dados_brutos['Close']
-        else:
-            raise ValueError("Colunas 'Adj Close' ou 'Close' não encontradas nos dados.")
-    else:
-        # Apenas um ticker e colunas simples
-        if 'Adj Close' in dados_brutos.columns:
-            return dados_brutos[['Adj Close']].rename(columns={'Adj Close': tickers[0]})
-        elif 'Close' in dados_brutos.columns:
-            return dados_brutos[['Close']].rename(columns={'Close': tickers[0]})
-        else:
-            raise ValueError("Coluna 'Adj Close' ou 'Close' não encontrada nos dados.")
+def obter_preco_diario_ajustado(tickers, periodo="7y"):
+    """
+    Baixa preços ajustados para múltiplos tickers.
+    """
+    dados = robust_yf_download(tickers, start=None, end=None, interval="1d")
+    if not dados.empty:
+        return dados["Adj Close"]
+    return pd.DataFrame()
             
 def calcular_fronteira_eficiente_macro(retornos, score_dict, n_portfolios=100, taxa_risco_livre=0.0):
     """
