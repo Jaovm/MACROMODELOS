@@ -97,7 +97,7 @@ ativos = pd.DataFrame({
 tickers = ativos['ticker'].tolist()
 
 # Obtendo dados históricos
-data_inicio = "2015-01-01"
+data_inicio = "2018-01-01"
 precos = get_stock_data(tickers, data_inicio)
 
 # Calculando a probabilidade de alta
