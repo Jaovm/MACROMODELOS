@@ -10,10 +10,13 @@ api_key = "rd6uBzkLLSPG68s9GcSx3folN76IxRhV"
 # Função para baixar os dados históricos de ações
 def get_stock_data(tickers, data_inicio):
     # Baixa os dados usando yfinance, agrupando por ticker
-    dados = yf.download(tickers, start=data_inicio, group_by='ticker', progress=False)
+    dados = yf.download(tickers, start=data_inicio, progress=False)
     
-    # Extrai apenas o 'Adj Close' para cada ticker
-    precos = pd.DataFrame({ticker: dados[ticker]['Adj Close'] for ticker in tickers if 'Adj Close' in dados[ticker]})
+    # Checando se 'Adj Close' está presente e organizando os dados
+    if 'Adj Close' in dados.columns:
+        precos = dados['Adj Close']
+    else:
+        precos = dados.loc[:, (slice(None), 'Adj Close')].droplevel(1, axis=1)
     
     # Remove colunas onde todos os valores são NaN
     precos.dropna(how='all', axis=1, inplace=True)
