@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pypfopt.expected_returns import mean_historical_return
 from pypfopt.risk_models import CovarianceShrinkage
 from pypfopt.efficient_frontier import EfficientFrontier
-from pypfopt.hierarchical_risk_parity import HRPOpt
+#from pypfopt.hierarchical_risk_parity import HRPOpt
 from io import BytesIO
 
 # -------------------- CONFIG --------------------
@@ -45,8 +45,8 @@ if uso_otimizacao:
     ef = EfficientFrontier(retornos, cov)
     sharpe_pesos = ef.max_sharpe()
     pesos_sharpe = pd.Series(sharpe_pesos).drop("Expected Return", errors='ignore')
-    hrp = HRPOpt(precos.pct_change().dropna())
-    pesos_hrp = hrp.optimize()
+    #hrp = HRPOpt(precos.pct_change().dropna())
+    #pesos_hrp = hrp.optimize()
     pesos_otimizados = (pesos_sharpe + pesos_hrp) / 2
     pesos_sugeridos = pesos_otimizados if not uso_macro else (pesos_otimizados + pesos_atuais) / 2
 
