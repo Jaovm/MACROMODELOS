@@ -18,14 +18,21 @@ def get_stock_data(tickers, data_inicio):
     response = requests.get(url)
     data = response.json()
     
+    # Verificando o conteúdo da resposta para entender a estrutura
+    print(data)  # Isso vai mostrar como a resposta está estruturada
+    
     # Extraindo os dados históricos de cada ticker
     historico = {}
     
-    for ticker in data['symbol']['historical']:
-        # Extraindo a data e o fechamento ajustado
-        dates = [entry['date'] for entry in ticker['historical']]
-        adj_close = [entry['adjClose'] for entry in ticker['historical']]
-        historico[ticker['symbol']] = pd.Series(data=adj_close, index=pd.to_datetime(dates))
+    # Ajuste de verificação para a chave correta
+    if 'historical' in data:
+        for ticker_data in data['historical']:
+            ticker = ticker_data['symbol']  # Usando 'symbol' para identificar cada ação
+            dates = [entry['date'] for entry in ticker_data['historical']]
+            adj_close = [entry['adjClose'] for entry in ticker_data['historical']]
+            historico[ticker] = pd.Series(data=adj_close, index=pd.to_datetime(dates))
+    else:
+        print("Erro ao buscar dados históricos:", data)
     
     # Transformando em DataFrame
     precos = pd.DataFrame(historico)
