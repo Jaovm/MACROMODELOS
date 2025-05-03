@@ -1,136 +1,112 @@
+import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
-import requests
-import streamlit as st
+from scipy.optimize import minimize
+from datetime import datetime
 
-# API key para a FMP
 api_key = "rd6uBzkLLSPG68s9GcSx3folN76IxRhV"
 
-# Função para obter os preços históricos das ações a partir da API FMP
+# ---------- Funções utilitárias ---------- #
+
 def get_stock_data(tickers, data_inicio):
-    # Converte a lista de tickers em uma string separada por vírgula
     tickers_str = ",".join(tickers)
-    
-    # URL da API da FMP para obter os dados históricos
-    url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{tickers_str}?from={data_inicio}&apikey={api_key}'
-    
-    # Fazendo a requisição à API
+    url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{tickers_str}?from={data_inicio}&apikey={api_key}&serietype=line"
+
     response = requests.get(url)
     data = response.json()
     
-    # Verificando o conteúdo da resposta para entender a estrutura
-    print(data)  # Isso vai mostrar como a resposta está estruturada
-    
-    # Extraindo os dados históricos de cada ticker
     historico = {}
-    
-    # Ajuste de verificação para a chave correta
-    if 'historical' in data:
-        for ticker_data in data['historical']:
-            ticker = ticker_data['symbol']  # Usando 'symbol' para identificar cada ação
-            dates = [entry['date'] for entry in ticker_data['historical']]
-            adj_close = [entry['adjClose'] for entry in ticker_data['historical']]
-            historico[ticker] = pd.Series(data=adj_close, index=pd.to_datetime(dates))
-    else:
-        print("Erro ao buscar dados históricos:", data)
-    
-    # Transformando em DataFrame
-    precos = pd.DataFrame(historico)
-    
-    return precos
 
-# Função para calcular probabilidade de alta nos próximos 12 meses
+    if isinstance(data, dict) and 'historicalStockList' in data:
+        for item in data['historicalStockList']:
+            symbol = item['symbol']
+            if 'historical' in item:
+                dates = [entry['date'] for entry in item['historical']]
+                adj_close = [entry['adjClose'] for entry in item['historical']]
+                historico[symbol] = pd.Series(data=adj_close, index=pd.to_datetime(dates))
+    elif isinstance(data, dict) and 'symbol' in data:
+        symbol = data['symbol']
+        dates = [entry['date'] for entry in data['historical']]
+        adj_close = [entry['adjClose'] for entry in data['historical']]
+        historico[symbol] = pd.Series(data=adj_close, index=pd.to_datetime(dates))
+    else:
+        raise ValueError("Formato inesperado na resposta da API")
+
+    precos = pd.DataFrame(historico).sort_index()
+    return precos.dropna(how='all', axis=1)
+
 def calcular_probabilidade_alta(precos):
-    # Calculando retornos diários
     retornos = precos.pct_change().dropna()
-    
-    # Calculando a probabilidade de alta (simples, assumindo distribuição normal)
-    probabilidade_alta = (retornos.mean() + 2 * retornos.std()).mean()  # Aproximando probabilidade de alta
-    
-    return probabilidade_alta
+    media_anual = retornos.mean() * 252
+    desvio_anual = retornos.std() * np.sqrt(252)
 
-# Função para calcular a alocação ótima de carteira (usando uma técnica de otimização simples)
-def alocacao_otima(precos):
-    retornos = precos.pct_change().dropna()
-    cov_matrix = retornos.cov()
-    media_retornos = retornos.mean()
+    # Probabilidade de retorno > 0 usando distribuição normal padrão
+    prob = 1 - (0.5 * (1 - (media_anual / desvio_anual)))
+    return prob.clip(0, 1)
+
+def fronteira_eficiente(retornos, n_portfolios=5000, risco_livre=0.0):
+    num_assets = retornos.shape[1]
+    resultados = {'retorno': [], 'volatilidade': [], 'sharpe': [], 'pesos': []}
     
-    # Alocação ótima por meio da maximização de retorno (simplificada)
-    alocacao = media_retornos / media_retornos.sum()  # Alocação proporcional ao retorno esperado
-    
-    return alocacao
+    media_retornos = retornos.mean() * 252
+    cov_matrix = retornos.cov() * 252
 
-# Função para obter dados da API FMP para o cenário macroeconômico
-def get_macroeconomic_data():
-    url = f'https://financialmodelingprep.com/api/v3/economic_indicators?apikey={api_key}'
-    response = requests.get(url)
-    data = response.json()
-    return data
+    for _ in range(n_portfolios):
+        pesos = np.random.dirichlet(np.ones(num_assets))
+        ret_esperado = np.dot(pesos, media_retornos)
+        volatilidade = np.sqrt(np.dot(pesos.T, np.dot(cov_matrix, pesos)))
+        sharpe = (ret_esperado - risco_livre) / volatilidade
+        resultados['retorno'].append(ret_esperado)
+        resultados['volatilidade'].append(volatilidade)
+        resultados['sharpe'].append(sharpe)
+        resultados['pesos'].append(pesos)
 
-# Função para classificar o cenário macroeconômico com base em PIB e Selic
-def classificar_cenario_macro():
-    data = get_macroeconomic_data()
-    
-    # Simulação simples de classificação do cenário baseado no PIB e na Selic
-    pib = data['economicIndicators'][0]['value']  # PIB em valor (exemplo)
-    selic = data['economicIndicators'][1]['value']  # Taxa Selic
-    
-    if selic > 10 and pib < 2:
-        return 'Restritivo'
-    elif selic < 5 and pib > 4:
-        return 'Expansionista'
-    else:
-        return 'Neutro'
+    df_resultados = pd.DataFrame(resultados)
+    return df_resultados
 
-# Função para sugerir compras com base no cenário macroeconômico
-def sugerir_compras(ativos, cenario):
-    # Exemplo simples de sugestão de compras com base no cenário
-    if cenario == 'Expansionista':
-        ativos_recomendados = ativos[ativos['setor'] == 'Tecnologia']
-    elif cenario == 'Restritivo':
-        ativos_recomendados = ativos[ativos['setor'] == 'Energia']
-    else:
-        ativos_recomendados = ativos[ativos['setor'] == 'Saúde']
-    
-    return ativos_recomendados
+def melhor_portfolio(df_resultados, tickers):
+    idx_max_sharpe = df_resultados['sharpe'].idxmax()
+    melhor = df_resultados.iloc[idx_max_sharpe]
+    return pd.Series(data=melhor['pesos'], index=tickers, name='Peso ótimo')
 
-# Dados de exemplo: tickers e seus setores
-ativos = pd.DataFrame({
-    'ticker': ['AGRO3.SA', 'BBAS3.SA', 'BBSE3.SA', 'BPAC11.SA', 'EGIE3.SA', 'ITUB3.SA', 'PRIO3.SA', 'PSSA3.SA', 'SAPR4.SA', 'SBSP3.SA', 'VIVT3.SA', 'WEGE3.SA', 'TOTS3.SA', 'B3SA3.SA', 'TAEE3.SA'],
-    'setor': ['Agronegócio', 'Bancos', 'Seguradoras', 'Financeiro', 'Energia', 'Bancos', 'Petróleo', 'Seguradoras', 'Energia', 'Utilidades', 'Comunicação', 'Indústria', 'Tecnologia', 'Bolsas', 'Energia']
-})
+def sugerir_compras(carteira_atual, prob_alta, limite_max=0.2):
+    # Aumentar peso de ativos com alta probabilidade de valorização
+    pesos = prob_alta / prob_alta.sum()
+    pesos = pesos.clip(upper=limite_max)
+    pesos = pesos / pesos.sum()  # Normalizar
 
-# Exemplo de tickers
-tickers = ativos['ticker'].tolist()
+    return pesos.rename('Sugestão de Compra')
 
-# Obtendo dados históricos
+# ---------- App principal ---------- #
+
+st.title("Modelo Quantitativo de Carteira com API da FMP")
+
+tickers = st.text_input("Tickers separados por vírgula (ex: AAPL,MSFT,GOOG)", value="AAPL,MSFT,GOOG").split(",")
+tickers = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
 data_inicio = "2018-01-01"
-precos = get_stock_data(tickers, data_inicio)
 
-# Calculando a probabilidade de alta
-probabilidade_alta = calcular_probabilidade_alta(precos)
+try:
+    precos = get_stock_data(tickers, data_inicio)
+    st.success("Dados carregados com sucesso.")
+    
+    retornos = precos.pct_change().dropna()
+    
+    # Probabilidade de alta
+    prob_alta = calcular_probabilidade_alta(precos)
+    st.subheader("Probabilidade de Alta em 1 ano")
+    st.dataframe(prob_alta.sort_values(ascending=False).to_frame(style="color: green;"))
 
-# Calculando a alocação ótima
-alocacao = alocacao_otima(precos)
+    # Fronteira eficiente
+    st.subheader("Carteira na Fronteira Eficiente")
+    df_fronteira = fronteira_eficiente(retornos)
+    pesos_otimos = melhor_portfolio(df_fronteira, retornos.columns)
+    st.dataframe(pesos_otimos.to_frame(style="color: green;"))
 
-# Classificando o cenário macroeconômico
-cenario_macro = classificar_cenario_macro()
+    # Sugestão de compra com base no cenário macro (aqui simplificada pela probabilidade)
+    st.subheader("Sugestão de Alocação de Aporte")
+    sugestao = sugerir_compras(pesos_otimos, prob_alta)
+    st.dataframe(sugestao.to_frame(style="color: blue;"))
 
-# Sugerindo compras com base no cenário
-compras_recomendadas = sugerir_compras(ativos, cenario_macro)
-
-# Exibindo resultados
-print("Probabilidade de Alta nos Próximos 12 Meses:", probabilidade_alta)
-print("Alocação Ótima da Carteira:")
-print(alocacao)
-print(f"Cenário Macroeconômico: {cenario_macro}")
-print("Ativos Recomendados para Compra:")
-print(compras_recomendadas)
-
-# Streamlit display
-st.write(f"**Cenário Macroeconômico Atual**: {cenario_macro}")
-st.write("**Probabilidade de Alta (12 meses)**:", probabilidade_alta)
-st.write("**Alocação Ótima da Carteira**:")
-st.write(alocacao)
-st.write("**Ativos Recomendados para Compra**:")
-st.write(compras_recomendadas)
+except Exception as e:
+    st.error(f"Erro ao carregar dados ou calcular: {e}")
