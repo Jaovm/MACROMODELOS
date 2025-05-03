@@ -1,4 +1,3 @@
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import requests
@@ -7,19 +6,29 @@ import streamlit as st
 # API key para a FMP
 api_key = "rd6uBzkLLSPG68s9GcSx3folN76IxRhV"
 
-# Função para baixar os dados históricos de ações
+# Função para obter os preços históricos das ações a partir da API FMP
 def get_stock_data(tickers, data_inicio):
-    # Baixa os dados usando yfinance, agrupando por ticker
-    dados = yf.download(tickers, start=data_inicio, progress=False)
+    # Converte a lista de tickers em uma string separada por vírgula
+    tickers_str = ",".join(tickers)
     
-    # Checando se 'Adj Close' está presente e organizando os dados
-    if 'Adj Close' in dados.columns:
-        precos = dados['Adj Close']
-    else:
-        precos = dados.loc[:, (slice(None), 'Adj Close')].droplevel(1, axis=1)
+    # URL da API da FMP para obter os dados históricos
+    url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{tickers_str}?from={data_inicio}&apikey={api_key}'
     
-    # Remove colunas onde todos os valores são NaN
-    precos.dropna(how='all', axis=1, inplace=True)
+    # Fazendo a requisição à API
+    response = requests.get(url)
+    data = response.json()
+    
+    # Extraindo os dados históricos de cada ticker
+    historico = {}
+    
+    for ticker in data['symbol']['historical']:
+        # Extraindo a data e o fechamento ajustado
+        dates = [entry['date'] for entry in ticker['historical']]
+        adj_close = [entry['adjClose'] for entry in ticker['historical']]
+        historico[ticker['symbol']] = pd.Series(data=adj_close, index=pd.to_datetime(dates))
+    
+    # Transformando em DataFrame
+    precos = pd.DataFrame(historico)
     
     return precos
 
