@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import matplotlib.pyplot as plt
 from datetime import datetime
 from pypfopt.expected_returns import mean_historical_return
 from pypfopt.risk_models import CovarianceShrinkage
 from pypfopt.efficient_frontier import EfficientFrontier
+from pypfopt import plotting
 
 # --- Funções auxiliares ---
 def obter_preco_fmp(ticker, data_inicio, api_key):
@@ -26,10 +28,18 @@ def carregar_precos(tickers, data_inicio, api_key):
     )
     return precos.dropna(how='all')
 
-def calcular_probabilidades_altas(precos):
-    retornos_diarios = precos.pct_change().dropna()
-    probabilidades = (retornos_diarios > 0).sum() / len(retornos_diarios)
-    return probabilidades.round(2)
+def calcular_probabilidade_alta_12m(precos):
+    retornos_12m = precos.pct_change(252)
+    sinais = retornos_12m > 0
+    return sinais.sum() / sinais.count()
+
+def obter_multiplo_fmp(ticker, api_key):
+    url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={api_key}"
+    r = requests.get(url)
+    dados = r.json()
+    if isinstance(dados, list) and len(dados) > 0:
+        return dados[0]
+    return {}
 
 # --- Configuração inicial ---
 st.title("Gestor Inteligente - Carteira Otimizada com Valuation e Cenário Econômico")
@@ -51,18 +61,31 @@ if api_key:
     # --- Otimização com Markowitz ---
     retornos = mean_historical_return(precos)
     cov = CovarianceShrinkage(precos).ledoit_wolf()
-    ef = EfficientFrontier(retornos, cov)
+    ef = EfficientFrontier(retornos, cov, weight_bounds=(0, 0.15))  # Limite de 15% por ativo
     pesos_otimizados = ef.max_sharpe()
     pesos_limpos = ef.clean_weights()
 
     # --- Probabilidades de alta histórica ---
-    probabilidades = calcular_probabilidades_altas(precos)
+    probabilidades = calcular_probabilidade_alta_12m(precos)
+
+    # --- Múltiplos financeiros ---
+    multiplos = {}
+    for ticker in tickers:
+        dados = obter_multiplo_fmp(ticker, api_key)
+        multiplos[ticker] = {
+            "P/L": dados.get("peRatioTTM", np.nan),
+            "P/VP": dados.get("pbRatioTTM", np.nan),
+            "ROE": dados.get("roeTTM", np.nan)
+        }
 
     # --- Tabela de comparação ---
     df_resultado = pd.DataFrame({
         "Peso Atual": pd.Series(pesos_atuais_dict),
         "Peso Otimizado": pd.Series(pesos_limpos),
-        "Probabilidade de Alta": probabilidades
+        "Probabilidade de Alta (12M)": probabilidades,
+        "P/L": pd.Series({k: v["P/L"] for k, v in multiplos.items()}),
+        "P/VP": pd.Series({k: v["P/VP"] for k, v in multiplos.items()}),
+        "ROE": pd.Series({k: v["ROE"] for k, v in multiplos.items()})
     }).fillna(0)
 
     df_resultado["Delta Aporte (%)"] = ((df_resultado["Peso Otimizado"] - df_resultado["Peso Atual"]).clip(lower=0) * 100).round(2)
@@ -73,6 +96,13 @@ if api_key:
     if usar_sugestao:
         recomendados = df_resultado[df_resultado["Delta Aporte (%)"] > 0].sort_values("Delta Aporte (%)", ascending=False)
         st.subheader("Recomendações de Compra (sem vendas)")
-        st.table(recomendados[["Delta Aporte (%)", "Probabilidade de Alta"]])
+        st.table(recomendados[["Delta Aporte (%)", "Probabilidade de Alta (12M)", "P/L", "P/VP", "ROE"]])
+
+    # --- Fronteira Eficiente ---
+    st.subheader("Fronteira Eficiente")
+    fig, ax = plt.subplots()
+    plotting.plot_efficient_frontier(ef, ax=ax, show_assets=True)
+    plt.tight_layout()
+    st.pyplot(fig)
 else:
     st.warning("Insira sua API Key para continuar.")
