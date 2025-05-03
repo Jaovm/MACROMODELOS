@@ -1,89 +1,117 @@
-# gestor_inteligente.py
-import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-from pypfopt.expected_returns import mean_historical_return
-from pypfopt.risk_models import CovarianceShrinkage
-from pypfopt.efficient_frontier import EfficientFrontier
-#from pypfopt.hierarchical_risk_parity import HRPOpt
-from io import BytesIO
+import requests
+import streamlit as st
 
-# -------------------- CONFIG --------------------
-st.set_page_config(page_title="Gestor Inteligente", layout="wide")
-st.title("Gestor Inteligente: Otimizador de Carteiras com Valuation e Macro")
+# API key para a FMP
+api_key = "rd6uBzkLLSPG68s9GcSx3folN76IxRhV"
 
-# -------------------- INPUTS --------------------
-st.sidebar.header("Configurações")
-uso_macro = st.sidebar.checkbox("Usar Score Macro + Valuation", value=True)
-uso_otimizacao = st.sidebar.checkbox("Usar Otimização Quantitativa (Sharpe, HRP)", value=True)
-aporte = st.sidebar.number_input("Valor do novo aporte (R$)", min_value=0.0, value=1000.0, step=100.0)
+# Função para baixar os dados históricos de ações
+def get_stock_data(tickers, data_inicio):
+    # Baixa os dados usando yfinance, agrupando por ticker
+    dados = yf.download(tickers, start=data_inicio, group_by='ticker', progress=False)
+    
+    # Extrai apenas o 'Adj Close' para cada ticker
+    precos = pd.DataFrame({ticker: dados[ticker]['Adj Close'] for ticker in tickers if 'Adj Close' in dados[ticker]})
+    
+    # Remove colunas onde todos os valores são NaN
+    precos.dropna(how='all', axis=1, inplace=True)
+    
+    return precos
 
-# -------------------- DADOS DA CARTEIRA ATUAL --------------------
-tickers = ['AGRO3.SA','BBAS3.SA','BBSE3.SA','BPAC11.SA','EGIE3.SA','ITUB3.SA','PRIO3.SA','PSSA3.SA',
-           'SAPR4.SA','SBSP3.SA','VIVT3.SA','WEGE3.SA','TOTS3.SA','B3SA3.SA','TAEE3.SA','CMIG3.SA']
-pesos_atuais = np.array([0.07, 0.05, 0.13, 0.06, 0.07, 0.07, 0.11, 0.08, 0.05, 0.03,
-                         0.05, 0.15, 0.03, 0.01, 0.05, 0.00])
+# Função para calcular probabilidade de alta nos próximos 12 meses
+def calcular_probabilidade_alta(precos):
+    # Calculando retornos diários
+    retornos = precos.pct_change().dropna()
+    
+    # Calculando a probabilidade de alta (simples, assumindo distribuição normal)
+    probabilidade_alta = (retornos.mean() + 2 * retornos.std()).mean()  # Aproximando probabilidade de alta
+    
+    return probabilidade_alta
 
-# -------------------- DOWNLOAD DE PREÇOS --------------------
-st.subheader("Histórico de Preços")
-data_inicio = datetime.today() - timedelta(days=365*5)
-precos = yf.download(tickers, start=data_inicio)["Adj Close"].dropna(how="all", axis=1)
-st.line_chart(precos)
+# Função para calcular a alocação ótima de carteira (usando uma técnica de otimização simples)
+def alocacao_otima(precos):
+    retornos = precos.pct_change().dropna()
+    cov_matrix = retornos.cov()
+    media_retornos = retornos.mean()
+    
+    # Alocação ótima por meio da maximização de retorno (simplificada)
+    alocacao = media_retornos / media_retornos.sum()  # Alocação proporcional ao retorno esperado
+    
+    return alocacao
 
-# -------------------- RETORNOS E RISCO --------------------
-st.subheader("Análise Quantitativa")
-retornos = mean_historical_return(precos)
-cov = CovarianceShrinkage(precos).ledoit_wolf()
+# Função para obter dados da API FMP para o cenário macroeconômico
+def get_macroeconomic_data():
+    url = f'https://financialmodelingprep.com/api/v3/economic_indicators?apikey={api_key}'
+    response = requests.get(url)
+    data = response.json()
+    return data
 
-# Otimizações
-pesos_sugeridos = pd.Series(index=tickers, data=pesos_atuais)
+# Função para classificar o cenário macroeconômico com base em PIB e Selic
+def classificar_cenario_macro():
+    data = get_macroeconomic_data()
+    
+    # Simulação simples de classificação do cenário baseado no PIB e na Selic
+    pib = data['economicIndicators'][0]['value']  # PIB em valor (exemplo)
+    selic = data['economicIndicators'][1]['value']  # Taxa Selic
+    
+    if selic > 10 and pib < 2:
+        return 'Restritivo'
+    elif selic < 5 and pib > 4:
+        return 'Expansionista'
+    else:
+        return 'Neutro'
 
-if uso_otimizacao:
-    ef = EfficientFrontier(retornos, cov)
-    sharpe_pesos = ef.max_sharpe()
-    pesos_sharpe = pd.Series(sharpe_pesos).drop("Expected Return", errors='ignore')
-    #hrp = HRPOpt(precos.pct_change().dropna())
-    #pesos_hrp = hrp.optimize()
-    pesos_otimizados = (pesos_sharpe + pesos_hrp) / 2
-    pesos_sugeridos = pesos_otimizados if not uso_macro else (pesos_otimizados + pesos_atuais) / 2
+# Função para sugerir compras com base no cenário macroeconômico
+def sugerir_compras(ativos, cenario):
+    # Exemplo simples de sugestão de compras com base no cenário
+    if cenario == 'Expansionista':
+        ativos_recomendados = ativos[ativos['setor'] == 'Tecnologia']
+    elif cenario == 'Restritivo':
+        ativos_recomendados = ativos[ativos['setor'] == 'Energia']
+    else:
+        ativos_recomendados = ativos[ativos['setor'] == 'Saúde']
+    
+    return ativos_recomendados
 
-# -------------------- PROBABILIDADE DE ALTA --------------------
-st.subheader("Probabilidade Histórica de Alta")
-retornos_mensais = precos.resample('M').last().pct_change().dropna()
-prob_alta = (retornos_mensais > 0).sum() / len(retornos_mensais)
-st.dataframe(prob_alta.sort_values(ascending=False).rename("Probabilidade de Alta"))
-
-# -------------------- RECOMENDAÇÃO DE COMPRA --------------------
-st.subheader("Sugestão de Compra com Aporte")
-valores_atuais = pesos_atuais * 100000  # Supondo R$ 100.000 de carteira atual
-valores_futuros = valores_atuais + pesos_sugeridos * aporte
-alocacao_final = valores_futuros / valores_futuros.sum()
-
-df_recomendacao = pd.DataFrame({
-    "Ticker": tickers,
-    "Peso Atual": pesos_atuais,
-    "Peso Sugerido": pesos_sugeridos,
-    "Alocação Final (%)": alocacao_final
+# Dados de exemplo: tickers e seus setores
+ativos = pd.DataFrame({
+    'ticker': ['AGRO3.SA', 'BBAS3.SA', 'BBSE3.SA', 'BPAC11.SA', 'EGIE3.SA', 'ITUB3.SA', 'PRIO3.SA', 'PSSA3.SA', 'SAPR4.SA', 'SBSP3.SA', 'VIVT3.SA', 'WEGE3.SA', 'TOTS3.SA', 'B3SA3.SA', 'TAEE3.SA'],
+    'setor': ['Agronegócio', 'Bancos', 'Seguradoras', 'Financeiro', 'Energia', 'Bancos', 'Petróleo', 'Seguradoras', 'Energia', 'Utilidades', 'Comunicação', 'Indústria', 'Tecnologia', 'Bolsas', 'Energia']
 })
-df_recomendacao["Compra Recomendada (R$)"] = alocacao_final * (aporte + valores_atuais.sum()) - valores_atuais
 
-st.dataframe(df_recomendacao.set_index("Ticker"))
+# Exemplo de tickers
+tickers = ativos['ticker'].tolist()
 
-# -------------------- GRÁFICOS --------------------
-st.subheader("Distribuição da Carteira")
-col1, col2 = st.columns(2)
-with col1:
-    st.caption("Antes do Aporte")
-    st.pyplot(plt.pie(pesos_atuais, labels=tickers, autopct='%1.1f%%')[0].figure)
-with col2:
-    st.caption("Depois do Aporte")
-    st.pyplot(plt.pie(alocacao_final, labels=tickers, autopct='%1.1f%%')[0].figure)
+# Obtendo dados históricos
+data_inicio = "2015-01-01"
+precos = get_stock_data(tickers, data_inicio)
 
-# -------------------- EXPORTAÇÃO --------------------
-st.subheader("Exportar para Excel")
-excel = BytesIO()
-df_recomendacao.to_excel(excel, index=False)
-st.download_button("Baixar Excel", data=excel.getvalue(), file_name="recomendacao_carteira.xlsx")
+# Calculando a probabilidade de alta
+probabilidade_alta = calcular_probabilidade_alta(precos)
+
+# Calculando a alocação ótima
+alocacao = alocacao_otima(precos)
+
+# Classificando o cenário macroeconômico
+cenario_macro = classificar_cenario_macro()
+
+# Sugerindo compras com base no cenário
+compras_recomendadas = sugerir_compras(ativos, cenario_macro)
+
+# Exibindo resultados
+print("Probabilidade de Alta nos Próximos 12 Meses:", probabilidade_alta)
+print("Alocação Ótima da Carteira:")
+print(alocacao)
+print(f"Cenário Macroeconômico: {cenario_macro}")
+print("Ativos Recomendados para Compra:")
+print(compras_recomendadas)
+
+# Streamlit display
+st.write(f"**Cenário Macroeconômico Atual**: {cenario_macro}")
+st.write("**Probabilidade de Alta (12 meses)**:", probabilidade_alta)
+st.write("**Alocação Ótima da Carteira**:")
+st.write(alocacao)
+st.write("**Ativos Recomendados para Compra**:")
+st.write(compras_recomendadas)
